@@ -58,25 +58,25 @@ namespace GameCanvas
                 this.color      = color;
                 this.lineWidthX = lineWidthX;
                 this.lineWidthY = lineWidthY;
-
-                imageId  = 0;
-                clip     = zeroVector;
-                charList = null;
-                texture   = null;
+                
+                clip         = zeroVector;
+                charList     = null;
+                texture      = null;
+                textureAlpha = null;
             }
 
-            public DrawInfo(Texture texture, Matrix4x4 matrix, Vector4 clip)
+            public DrawInfo(Texture texture, Texture alpha, Matrix4x4 matrix, Vector4 clip)
             {
                 this.texture = texture;
-                this.matrix = matrix;
-                this.clip = clip;
+                textureAlpha = alpha;
+                this.matrix  = matrix;
+                this.clip    = clip;
 
-                type = DrawType.Image;
-                color = zeroColor;
-                imageId = 0;
+                type       = DrawType.Image;
+                color      = zeroColor;
                 lineWidthX = 0;
                 lineWidthY = 0;
-                charList = null;
+                charList   = null;
             }
 
             public DrawInfo(List<float> charList, Matrix4x4 matrix, Color color)
@@ -85,12 +85,12 @@ namespace GameCanvas
                 this.matrix   = matrix;
                 this.color    = color;
 
-                type       = DrawType.String;
-                lineWidthX = 0;
-                lineWidthY = 0;
-                imageId    = 0;
-                clip       = zeroVector;
-                texture     = null;
+                type         = DrawType.String;
+                lineWidthX   = 0;
+                lineWidthY   = 0;
+                clip         = zeroVector;
+                texture      = null;
+                textureAlpha = null;
             }
 
             public DrawType     type;
@@ -98,10 +98,10 @@ namespace GameCanvas
             public Color        color;
             public float        lineWidthX;
             public float        lineWidthY;
-            public int          imageId;
             public Vector4      clip;
             public List<float>  charList;
             public Texture      texture;
+            public Texture      textureAlpha;
         }
 
         #endregion
@@ -121,12 +121,15 @@ namespace GameCanvas
 
         private bool        _isLoaded               = false;        //
         private Function    _onStart                = null;         // リソース読み込み完了コールバック
+        private ImageDatabase _imageDB              = null;         // 画像情報データベース
+        private SoundDatabase _soundDB              = null;         // 音声情報データベース
         private Texture2D   _bitmapFontTexture      = null;         // ビットマップフォント画像
         private int         _numImage               = 0;            // 認識済みの画像：数量
-        private List<Texture2D> _imageList          = null;         // 認識済みの画像：データ配列
+        private int         _numAtlas               = 0;            // 認識済みのアトラス：数量
         private int         _numSound               = 0;            // 認識済みの音源：数量
-        private List<AudioClip> _soundList          = null;         // 認識済みの音源：データ配列
-        
+        private Dictionary<string, Texture2D> _atlas= null;         // 認識済みのアトラス：データ配列
+        private Dictionary<string, Texture2D> _alpha= null;         // 認識済みのアトラス：データ配列
+
         private WebCamTexture _cameraTexture        = null;         // 映像入力
 
         private SerializableDictionary<string, string> _save = null;// セーブデータ
@@ -175,6 +178,8 @@ namespace GameCanvas
         private int         _matPropMatrix          = 0;
         private int         _matPropLineWidth       = 0;
         private int         _matPropImageTex        = 0;
+        private int         _matPropAlphaTex        = 0;
+        private int         _matPropEnableAlphaSplit= 0;
         private int         _matPropClip            = 0;
         private int         _matPropCharTex         = 0;
         private int         _matPropTextLength      = 0;
@@ -272,6 +277,8 @@ namespace GameCanvas
                 _matPropMatrix      = Shader.PropertyToID("_Matrix");
                 _matPropLineWidth   = Shader.PropertyToID("_LineWidth");
                 _matPropImageTex    = Shader.PropertyToID("_ImageTex");
+                _matPropAlphaTex    = Shader.PropertyToID("_AlphaTex");
+                _matPropEnableAlphaSplit = Shader.PropertyToID("_EnableAlphaSplit");
                 _matPropClip        = Shader.PropertyToID("_Clip");
                 _matPropCharTex     = Shader.PropertyToID("_CharTex");
                 _matPropTextLength  = Shader.PropertyToID("_TextLength");
@@ -305,64 +312,33 @@ namespace GameCanvas
 
         private IEnumerator LoadResourceAll()
         {
+            var imageDBReq = Resources.LoadAsync<ImageDatabase>("GCImageDB");
+            var soundDBReq = Resources.LoadAsync<SoundDatabase>("GCSoundDB");
             var fontReq = Resources.LoadAsync<Texture2D>("PixelMplus10");
 
-            var imageReqList = new List<ResourceRequest>();
-            var soundReqList = new List<ResourceRequest>();
-
-            _numImage = 0;
-            while (true)
+            while (!imageDBReq.isDone)
             {
-                var img = Resources.LoadAsync<Texture2D>(string.Format("img{0}", _numImage));
-                if (img == null || (img.isDone && img.asset == null)) break;
-
-                imageReqList.Add(img);
-                ++_numImage;
-            }
-
-            _numSound = 0;
-            while (true)
-            {
-                var snd = Resources.LoadAsync<AudioClip>(string.Format("snd{0}", _numSound));
-                if (snd == null || (snd.isDone && snd.asset == null)) break;
-
-                soundReqList.Add(snd);
-                ++_numSound;
-            }
-
-            _imageList = new List<Texture2D>(_numImage);
-            _soundList = new List<AudioClip>(_numSound);
-
-            var numImageReq = _numImage;
-            var numSoundReq = _numSound;
-
-            while (numImageReq > 0 || numSoundReq > 0)
-            {
-                for (var i = numImageReq - 1; i >= 0; --i)
-                {
-                    var req = imageReqList[i];
-                    if (req.isDone)
-                    {
-                        _imageList.Insert(0, req.asset as Texture2D);
-                        imageReqList.Remove(req);
-                        --numImageReq;
-                    }
-                }
-
-                for (var i = numSoundReq - 1; i >= 0; --i)
-                {
-                    var req = soundReqList[i];
-                    if (req.isDone)
-                    {
-                        _soundList.Insert(0, req.asset as AudioClip);
-                        soundReqList.Remove(req);
-                        --numSoundReq;
-                    }
-                }
-
                 yield return 0;
             }
+            _imageDB = imageDBReq.asset as ImageDatabase;
+            _numImage = _imageDB.images.Length;
+            _numAtlas = _imageDB.atlases.Length;
+            _atlas = new Dictionary<string, Texture2D>(_numAtlas);
+            _alpha = new Dictionary<string, Texture2D>(_numAtlas);
+            for (var i = 0; i < _numAtlas; ++i)
+            {
+                var name = _imageDB.atlases[i].name;
+                _atlas.Add(name, _imageDB.atlases[i]);
+                _alpha.Add(name, _imageDB.alphaAtlases[i]);
+            }
 
+            while (!soundDBReq.isDone)
+            {
+                yield return 0;
+            }
+            _soundDB = soundDBReq.asset as SoundDatabase;
+            _numSound = _soundDB.sounds.Length;
+            
             while (!fontReq.isDone)
             {
                 yield return 0;
@@ -467,9 +443,18 @@ namespace GameCanvas
         {
             if (info.type != DrawType.Image) Debug.LogAssertion("`info.type == DrawType.Image` failed");
 
-            _materialDrawImage.SetTexture(_matPropImageTex, info.texture);
-            _materialDrawImage.SetMatrix (_matPropMatrix  , info.matrix );
-            _materialDrawImage.SetVector (_matPropClip    , info.clip   );
+            if (info.textureAlpha == null)
+            {
+                _materialDrawImage.SetFloat(_matPropEnableAlphaSplit, 0);
+            }
+            else
+            {
+                _materialDrawImage.SetFloat(_matPropEnableAlphaSplit, 1);
+                _materialDrawImage.SetTexture(_matPropAlphaTex, info.textureAlpha);
+            }
+            _materialDrawImage.SetTexture( _matPropImageTex, info.texture );
+            _materialDrawImage.SetMatrix ( _matPropMatrix  , info.matrix  );
+            _materialDrawImage.SetVector ( _matPropClip    , info.clip    );
 
             var temp = RenderTexture.GetTemporary(_canvasWidth, _canvasHeight, 0);
             Graphics.Blit(_canvasRender, temp);
@@ -646,7 +631,7 @@ namespace GameCanvas
                 return 0;
             }
 
-            return _imageList[id].width;
+            return _imageDB.images[id].width;
         }
 
         /// <summary>
@@ -662,7 +647,7 @@ namespace GameCanvas
                 return 0;
             }
 
-            return _imageList[id].height;
+            return _imageDB.images[id].height;
         }
 
         /// <summary>
@@ -907,19 +892,53 @@ namespace GameCanvas
                 return;
             }
 
+            var info = _imageDB.images[id];
+            var atlas = _atlas[info.atlasName];
+            var w = info.width;
+            var h = info.height;
+            var r = info.rect;
+            var ar = info.atlasRect;
+            var atlasWidth = atlas.width;
+            var atlasHeight = atlas.height;
+            var clip = new Vector4(atlasWidth * ar.x, atlasHeight * (1f - ar.w), atlasWidth * (1f - ar.z), atlasHeight * ar.y);
+            var offset = new Vector4(w * r.x - clipLeft, h * (1f - r.w) - clipTop, w * (1f - r.z) - clipRight, h * r.y - clipBottom);
+            if (offset.x < 0f)
+            {
+                clip.x -= offset.x;
+                offset.x = 0f;
+            }
+            if (offset.y < 0f)
+            {
+                clip.y -= offset.y;
+                offset.y = 0f;
+            }
+            if (offset.z < 0f)
+            {
+                clip.z -= offset.z;
+                offset.z = 0f;
+            }
+            if (offset.w < 0f)
+            {
+                clip.w -= offset.w;
+                offset.w = 0f;
+            }
+            x += offset.x * scaleH;
+            y += offset.y * scaleV;
+            //var pivot = new Vector2(rotationX, rotationY);
+            var pivot = new Vector2(rotationX - offset.x * scaleH, rotationY - offset.y * scaleV);
+
             Matrix4x4 mat;
-            if (rotationX == 0 && rotationY == 0)
+            if (pivot.x == 0 && pivot.y == 0)
             {
                 mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.AngleAxis(angle, Vector3.forward), new Vector3(scaleH, scaleV, 1f));
             }
             else
             {
-                mat = Matrix4x4.TRS(new Vector3(x + rotationX, y + rotationY, 0f), Quaternion.AngleAxis(angle, Vector3.forward), Vector3.one);
-                mat *= Matrix4x4.TRS(new Vector3(-rotationX, -rotationY, 0f), Quaternion.identity, new Vector3(scaleH, scaleV, 1f));
+                mat = Matrix4x4.TRS(new Vector3(x + pivot.x, y + pivot.y, 0f), Quaternion.AngleAxis(angle, Vector3.forward), Vector3.one);
+                mat *= Matrix4x4.TRS(new Vector3(-pivot.x, -pivot.y, 0f), Quaternion.identity, new Vector3(scaleH, scaleV, 1f));
             }
 
-            var clip = new Vector4(clipLeft, clipTop, clipRight, clipBottom);
-            _drawQueue.Enqueue(new DrawInfo(_imageList[id], mat.inverse, clip));
+            _drawQueue.Enqueue(new DrawInfo(atlas, _alpha[info.atlasName], mat.inverse, clip));
         }
 
         /// <summary>
@@ -1296,7 +1315,7 @@ namespace GameCanvas
             }
 
             var clip = new Vector4(clipLeft, clipTop, clipRight, clipBottom);
-            _drawQueue.Enqueue(new DrawInfo(_cameraTexture, mat.inverse, clip));
+            _drawQueue.Enqueue(new DrawInfo(_cameraTexture, null, mat.inverse, clip));
         }
 
         #endregion
@@ -1452,7 +1471,7 @@ namespace GameCanvas
                 _audioBGM.Stop();
             }
 
-            _audioBGM.clip = _soundList[id];
+            _audioBGM.clip = _soundDB.sounds[id];
             _audioBGM.loop = isLoop;
             _audioBGM.Play();
         }
@@ -1500,7 +1519,7 @@ namespace GameCanvas
                 return;
             }
 
-            _audioSE.PlayOneShot(_soundList[id]);
+            _audioSE.PlayOneShot(_soundDB.sounds[id]);
         }
 
         /// <summary>
@@ -2100,7 +2119,7 @@ namespace GameCanvas
             }
 
             var clip = new Vector4(clipLeft, clipTop, clipRight, clipBottom);
-            _drawQueue.Enqueue(new DrawInfo(texture, mat.inverse, clip));
+            _drawQueue.Enqueue(new DrawInfo(texture, null, mat.inverse, clip));
         }
         
         private IEnumerator DownloadWebText(string url, Action<string> callback)
