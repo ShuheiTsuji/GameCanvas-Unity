@@ -1010,6 +1010,51 @@
             アプリケーションを終了します
             </summary>
         </member>
+        <member name="T:GameCanvas.ImageInfo">
+            <summary>
+            描画のための画像情報
+            </summary>
+        </member>
+        <member name="F:GameCanvas.ImageInfo.width">
+            <summary>画像のオリジナル幅</summary>
+        </member>
+        <member name="F:GameCanvas.ImageInfo.height">
+            <summary>画像のオリジナル高さ</summary>
+        </member>
+        <member name="F:GameCanvas.ImageInfo.rect">
+            <summary>アトラスに含まれる領域（余白を除いた領域）</summary>
+        </member>
+        <member name="F:GameCanvas.ImageInfo.atlasName">
+            <summary>アトラスのアセット名</summary>
+        </member>
+        <member name="F:GameCanvas.ImageInfo.atlasRect">
+            <summary>アトラスの対応する領域</summary>
+        </member>
+        <member name="T:GameCanvas.ImageDatabase">
+            <summary>
+            画像情報を保持するためのカスタムアセット
+            </summary>
+        </member>
+        <member name="F:GameCanvas.ImageDatabase.Path">
+            <summary>
+            カスタムアセットの保存先
+            </summary>
+        </member>
+        <member name="F:GameCanvas.ImageDatabase.images">
+            <summary>
+            イメージ情報
+            </summary>
+        </member>
+        <member name="F:GameCanvas.ImageDatabase.atlases">
+            <summary>
+            アトラス(RGB)リスト
+            </summary>
+        </member>
+        <member name="F:GameCanvas.ImageDatabase.alphaAtlases">
+            <summary>
+            アトラス(Alpha)リスト
+            </summary>
+        </member>
         <member name="T:GameCanvas.Env">
             <summary>
             環境変数
@@ -1033,6 +1078,21 @@
         <member name="F:GameCanvas.Env.Authors">
             <summary>
             GameCanvas の制作者情報
+            </summary>
+        </member>
+        <member name="T:GameCanvas.SoundDatabase">
+            <summary>
+            音声情報を保持するためのカスタムアセット
+            </summary>
+        </member>
+        <member name="F:GameCanvas.SoundDatabase.Path">
+            <summary>
+            カスタムアセットの保存先
+            </summary>
+        </member>
+        <member name="F:GameCanvas.SoundDatabase.sounds">
+            <summary>
+            音声リスト
             </summary>
         </member>
         <member name="T:GameCanvas.SerializableDictionary`2">

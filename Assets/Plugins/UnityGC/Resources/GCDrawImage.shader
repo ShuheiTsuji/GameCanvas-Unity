@@ -1,8 +1,10 @@
 ﻿Shader "Custom/GameCanvas/DrawImage" {
 	Properties{
 		_MainTex ("キャンバス", 2D) = "white" {}
-		_ImageTex("画像データ", 2D) = "white" {}
+		_ImageTex("画像データ(RGB)", 2D) = "white" {}
+		_AlphaTex("画像データ(Alpha)", 2D) = "white" {}
 		_Clip("切り抜き範囲 (left, top, right, bottom)", Vector) = (0, 0, 0, 0)
+		[Toggle] _EnableAlphaSplit("アルファ分割", float) = 0
 	}
 	SubShader {
 		Pass {
@@ -12,10 +14,11 @@
 
 			#include "UnityCG.cginc"
 
-			sampler2D _MainTex, _ImageTex;
+			sampler2D _MainTex, _ImageTex, _AlphaTex;
 			half4 _MainTex_TexelSize, _ImageTex_TexelSize;
 			float4 _Clip;
 			float4x4 _Matrix;
+			float _EnableAlphaSplit;
 
 			fixed4 frag(v2f_img i) : COLOR
 			{
@@ -27,8 +30,9 @@
 				{
 					float2 uv = float2((pi.x+_Clip.x) * _ImageTex_TexelSize.x, 1 - (pi.y+_Clip.y) * _ImageTex_TexelSize.y);
 					fixed4 c = tex2D(_ImageTex, uv);
-					if (c.a != 1)
-						return fixed4(lerp(tex2D(_MainTex, i.uv).rgb, c.rgb, c.a), 1);
+					fixed4 a = _EnableAlphaSplit == 0 ? c.a : tex2D(_AlphaTex, uv);
+					if (a.r != 1)
+						return fixed4(lerp(tex2D(_MainTex, i.uv).rgb, c.rgb, a.r), 1);
 					else
 						return c;
 				}
