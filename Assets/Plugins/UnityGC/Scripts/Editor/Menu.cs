@@ -18,12 +18,11 @@ namespace GameCanvas.Editor
     /// </summary>
     public class Menu
     {
-        [MenuItem("GameCanvas/アセットDBの強制更新", false, 100)]
+        [MenuItem("GameCanvas/アセットデータベースの強制更新", false, 100)]
         static void ForceRebuildDatabase()
         {
-            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
-            AssetProcessor.RebuildImageDatabase();
-            AssetProcessor.RebuildSoundDatabase();
+            UnityEditor.AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+            AssetProcessor.RebuildAssetDatabase();
         }
 
         [MenuItem("GameCanvas/Game.cs をクリップボードにコピー", false, 200)]

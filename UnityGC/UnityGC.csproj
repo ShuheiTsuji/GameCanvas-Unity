@@ -44,9 +44,8 @@
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="src\GameCanvas.cs" />
-    <Compile Include="src\GameCanvasImageDB.cs" />
+    <Compile Include="src\GameCanvasAssetDB.cs" />
     <Compile Include="src\GameCanvasEnv.cs" />
-    <Compile Include="src\GameCanvasSoundDB.cs" />
     <Compile Include="src\SerializableDictionary.cs" />
     <Compile Include="src\SingletonMonoBahaviour.cs" />
   </ItemGroup>

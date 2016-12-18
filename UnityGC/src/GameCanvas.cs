@@ -14,6 +14,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Rendering;
 using WebSocketSharp;
 
 using Function = UnityEngine.Events.UnityAction;
@@ -36,99 +37,39 @@ namespace GameCanvas
 
         #region UnityGC：構造体・定数
 
-        private const int MAX_GRAPHIC_ARRAY = 24;
-        private const int MAX_STRING_ARRAY = 128;
+        private const int       _MIN_RENDERER_SIZE   = 100;
 
-        private static readonly Vector4 zeroVector = Vector4.zero;
-        private static readonly Color   zeroColor  = Color.black;
-
-        private enum DrawType
-        {
-            Circle, FilledCircle, Rect, FilledRect, Image, String
-        }
-
-        private class DrawInfo
-        {
-            public DrawInfo(DrawType type, Matrix4x4 matrix, Color color, float lineWidthX, float lineWidthY)
-            {
-                if (type == DrawType.Image || type != DrawType.String) new Exception("DrawInfo type error.");
-
-                this.type       = type;
-                this.matrix     = matrix;
-                this.color      = color;
-                this.lineWidthX = lineWidthX;
-                this.lineWidthY = lineWidthY;
-                
-                clip         = zeroVector;
-                charList     = null;
-                texture      = null;
-                textureAlpha = null;
-            }
-
-            public DrawInfo(Texture texture, Texture alpha, Matrix4x4 matrix, Vector4 clip)
-            {
-                this.texture = texture;
-                textureAlpha = alpha;
-                this.matrix  = matrix;
-                this.clip    = clip;
-
-                type       = DrawType.Image;
-                color      = zeroColor;
-                lineWidthX = 0;
-                lineWidthY = 0;
-                charList   = null;
-            }
-
-            public DrawInfo(List<float> charList, Matrix4x4 matrix, Color color)
-            {
-                this.charList = charList;
-                this.matrix   = matrix;
-                this.color    = color;
-
-                type         = DrawType.String;
-                lineWidthX   = 0;
-                lineWidthY   = 0;
-                clip         = zeroVector;
-                texture      = null;
-                textureAlpha = null;
-            }
-
-            public DrawType     type;
-            public Matrix4x4    matrix;
-            public Color        color;
-            public float        lineWidthX;
-            public float        lineWidthY;
-            public Vector4      clip;
-            public List<float>  charList;
-            public Texture      texture;
-            public Texture      textureAlpha;
-        }
+        private static readonly Vector2 _VEC2_ZERO   = Vector2.zero;
+        private static readonly Vector2 _VEC2_ONE    = Vector2.one;
+        private static readonly Vector4 _VEC4_ZERO   = Vector4.zero;
+        private static readonly Color   _COLOR_WHITE = Color.white;
+        private static readonly Color   _COLOR_BLACK = Color.black;
 
         #endregion
 
         #region UnityGC：変数
 
-        private int         _deviceWidth            = 0;            // 画面解像度：横幅
-        private int         _deviceHeight           = 0;            // 画面解像度：縦幅
+        private int         _deviceWidth            = 0;            // 端末解像度：横幅
+        private int         _deviceHeight           = 0;            // 端末解像度：縦幅
+        private int         _canvasWidthWB            = 0;            // 実効解像度：横幅
+        private int         _canvasHeightWB           = 0;            // 実効解像度：縦幅
         private int         _canvasWidth            = 0;            // 描画解像度：横幅
         private int         _canvasHeight           = 0;            // 描画解像度：縦幅
-        private float       _canvasDisplayScale     = 1f;           // キャンバス解像度 / デバイス解像度
-        private Vector2     _canvasBorderSize       = Vector2.zero; // キャンバス左・上の黒縁の大きさ
+        private float       _canvasScale     = 1f;           // キャンバス解像度 / デバイス解像度
+        private Vector2     _canvasBorder       = _VEC2_ZERO;   // キャンバス左・上の黒縁の大きさ
 
-        private Color       _palletColor            = Color.black;  // 現在のパレットカラー
+        private int         _renderIndex            = 0;            // 現在の描画インデックス
+        private Color       _renderColor            = _COLOR_BLACK; // 現在のパレットカラー
+        private List<SpriteRenderer> _renderers     = null;         // レンダラーキャッシュ
+        private List<Transform> _transforms         = null;         // トランスフォームキャッシュ
         private float       _lineWidth              = 2f;           // 現在の線の太さ
         private float       _fontSize               = 20;           // 現在のフォントサイズ
 
         private bool        _isLoaded               = false;        //
         private Function    _onStart                = null;         // リソース読み込み完了コールバック
-        private ImageDatabase _imageDB              = null;         // 画像情報データベース
-        private SoundDatabase _soundDB              = null;         // 音声情報データベース
-        private Texture2D   _bitmapFontTexture      = null;         // ビットマップフォント画像
+        private AssetDatabase _assetDB              = null;         // アセットデータベース
         private int         _numImage               = 0;            // 認識済みの画像：数量
-        private int         _numAtlas               = 0;            // 認識済みのアトラス：数量
         private int         _numSound               = 0;            // 認識済みの音源：数量
-        private Dictionary<string, Texture2D> _atlas= null;         // 認識済みのアトラス：データ配列
-        private Dictionary<string, Texture2D> _alpha= null;         // 認識済みのアトラス：データ配列
 
         private WebCamTexture _cameraTexture        = null;         // 映像入力
 
@@ -145,9 +86,9 @@ namespace GameCanvas
         private bool        _isTapped               = false;        // タッチ：タップされた瞬間かどうか
         private bool        _isFlicked              = false;        // タッチ：フリックされた瞬間かどうか
         private float       _touchBeganTime         = -1f;          // タッチ：開始時刻(ゲーム開始からの経過時間:秒)
-        private Vector2     _unscaledTouchPoint     = -Vector2.one; // タッチ：座標
-        private Vector2     _touchPoint             = -Vector2.one; // タッチ：キャンバスピクセルに対応する座標
-        private Vector2     _touchBeganPoint        = -Vector2.one; // タッチ：開始座標
+        private Vector2     _unscaledTouchPoint     = -_VEC2_ONE;   // タッチ：座標
+        private Vector2     _touchPoint             = -_VEC2_ONE;   // タッチ：キャンバスピクセルに対応する座標
+        private Vector2     _touchBeganPoint        = -_VEC2_ONE;   // タッチ：開始座標
         private float       _touchTimeLength        = 0f;           // タッチ：連続時間(秒)
         private float       _touchHoldTimeLength    = 0f;           // タッチ：連続静止時間(秒)
         private float       _maxTapTimeLength       = 0.2f;         // タッチ：タップ判定時間長
@@ -160,33 +101,8 @@ namespace GameCanvas
         private float       _pinchScaleBegan        = 0f;           // ピンチインアウト：拡縮率：タッチ開始時から
         private float       _maxPinchInScale        = 0.95f;        // ピンチインアウト：ピンチイン判定縮小率
         private float       _minPinchOutScale       = 1.05f;        // ピンチインアウト：ピンチアウト判定拡大率
-        private Vector2     _mousePrevPoint         = -Vector2.one; // マウス互換：前回マウス位置
-
-        private Material    _materialInit           = null;         // マテリアル：初期化
-        private Material    _materialDraw           = null;         // マテリアル：図形描画
-        private Material    _materialDrawImage      = null;         // マテリアル：画像描画
-        private Material    _materialDrawString     = null;         // マテリアル：文字描画
-        private Queue<DrawInfo> _drawQueue          = null;         // 描画情報キュー
-        private float[]     _graphicTypeArray       = new float[MAX_GRAPHIC_ARRAY];     // 図形情報リスト：図形種別
-        private Color[]     _graphicColorArray      = new Color[MAX_GRAPHIC_ARRAY];     // 図形情報リスト：描画色
-        private Matrix4x4[] _graphicMatrixArray     = new Matrix4x4[MAX_GRAPHIC_ARRAY]; // 図形情報リスト：マトリックス
-        private float[]     _graphicLineWidthArray  = new float[MAX_GRAPHIC_ARRAY*2];   // 図形情報リスト：線の太さ
-        private int         _mapPropMainTex         = 0;
-        private int         _matPropColor           = 0;
-        private int         _matPropDrawCalls       = 0;
-        private int         _matPropType            = 0;
-        private int         _matPropMatrix          = 0;
-        private int         _matPropLineWidth       = 0;
-        private int         _matPropImageTex        = 0;
-        private int         _matPropAlphaTex        = 0;
-        private int         _matPropEnableAlphaSplit= 0;
-        private int         _matPropClip            = 0;
-        private int         _matPropCharTex         = 0;
-        private int         _matPropTextLength      = 0;
-        private int         _matPropText            = 0;
-
-        private RenderTexture _canvasRender         = null;         // レンダーテクスチャー
-        private MeshRenderer _quad                  = null;         // プリミティブ：Quad
+        private Vector2     _mousePrevPoint         = -_VEC2_ONE;   // マウス互換：前回マウス位置
+        
         private Camera      _camera                 = null;         // コンポーネント：Camera
         private AudioSource _audioSE                = null;         // コンポーネント：AudioClip
         private AudioSource _audioBGM               = null;         // コンポーネント：AudioClip
@@ -233,12 +149,15 @@ namespace GameCanvas
                 obj.transform.parent = baseTransform;
 
                 _camera = obj.AddComponent<Camera>();
-                _camera.transform.localPosition = new Vector3(0.0f, 0.0f, -10.0f);
-                _camera.clearFlags = CameraClearFlags.SolidColor;
-                _camera.backgroundColor = Color.black;
+
+                _camera.clearFlags = CameraClearFlags.Depth;
                 _camera.orthographic = true;
-                _camera.orthographicSize = Screen.height * 0.5f;
-                _camera.depth = -1;
+                var pos = _camera.transform.position;
+                pos.x = 0f;
+                pos.y = 0f;
+                pos.z = -10f;
+                _camera.transform.position = pos;
+                _camera.transform.localRotation = Quaternion.Euler(180f, 0f, 0f);
 
                 obj.AddComponent<AudioListener>();
             }
@@ -259,48 +178,20 @@ namespace GameCanvas
                 _audioBGM.spatialBlend = 0f;
             }
 
-            // Quadプリミティブの配置。2D描画の表示先として用いる
-            {
-                var obj = GameObject.CreatePrimitive(PrimitiveType.Quad);
-                obj.name = "Canvas";
-                obj.transform.parent = baseTransform;
-                
-                _materialInit       = new Material(Shader.Find("Custom/GameCanvas/Init"));
-                _materialDraw       = new Material(Shader.Find("Custom/GameCanvas/Draw"));
-                _materialDrawImage  = new Material(Shader.Find("Custom/GameCanvas/DrawImage"));
-                _materialDrawString = new Material(Shader.Find("Custom/GameCanvas/DrawString"));
-
-                _mapPropMainTex     = Shader.PropertyToID("_MainTex");
-                _matPropColor       = Shader.PropertyToID("_Color");
-                _matPropDrawCalls   = Shader.PropertyToID("_DrawCalls");
-                _matPropType        = Shader.PropertyToID("_Type");
-                _matPropMatrix      = Shader.PropertyToID("_Matrix");
-                _matPropLineWidth   = Shader.PropertyToID("_LineWidth");
-                _matPropImageTex    = Shader.PropertyToID("_ImageTex");
-                _matPropAlphaTex    = Shader.PropertyToID("_AlphaTex");
-                _matPropEnableAlphaSplit = Shader.PropertyToID("_EnableAlphaSplit");
-                _matPropClip        = Shader.PropertyToID("_Clip");
-                _matPropCharTex     = Shader.PropertyToID("_CharTex");
-                _matPropTextLength  = Shader.PropertyToID("_TextLength");
-                _matPropText        = Shader.PropertyToID("_Text");
-
-                _materialDraw.SetFloatArray(_matPropType, new float[MAX_GRAPHIC_ARRAY]);
-                _materialDraw.SetColorArray(_matPropColor, new Color[MAX_GRAPHIC_ARRAY]);
-                _materialDraw.SetMatrixArray(_matPropMatrix, new Matrix4x4[MAX_GRAPHIC_ARRAY]);
-                _materialDraw.SetFloatArray(_matPropLineWidth, new float[MAX_GRAPHIC_ARRAY*2]);
-                _materialDrawString.SetFloatArray(_matPropText, new float[MAX_STRING_ARRAY]);
-
-                _drawQueue = new Queue<DrawInfo>();
-
-                _quad = obj.GetComponent<MeshRenderer>();
-                _quad.enabled = false;
-                _quad.material.shader = Shader.Find("Unlit/Texture");
-                // [memo] SetResolution()で設定する
-                // _quad.material.mainTexture = _canvasRender;
-            }
-
             // キャンバスの初期化
-            SetResolution(640, 480);
+            {
+                _renderIndex = 0;
+                _renderColor = _COLOR_WHITE;
+                _renderers = new List<SpriteRenderer>(_MIN_RENDERER_SIZE);
+                _transforms = new List<Transform>(_MIN_RENDERER_SIZE);
+
+                for (var i = 0; i < _MIN_RENDERER_SIZE; ++i)
+                {
+                    AddRenderer();
+                }
+
+                SetResolution(640, 480);
+            }
 
             // 外部画像・音源データの読み込み
             _isLoaded = false;
@@ -310,49 +201,39 @@ namespace GameCanvas
             _webCache = new Dictionary<string, object>();
         }
 
+        private void AddRenderer()
+        {
+            var obj = new GameObject("SpriteRenderer");
+            obj.transform.parent = baseTransform;
+            var renderer = obj.AddComponent<SpriteRenderer>();
+            renderer.enabled = false;
+            renderer.lightProbeUsage = LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+            renderer.receiveShadows = false;
+            renderer.shadowCastingMode = ShadowCastingMode.Off;
+            renderer.sprite = null;
+            renderer.color = _COLOR_WHITE;
+            _renderers.Add(renderer);
+            _transforms.Add(obj.transform);
+        }
+
         private IEnumerator LoadResourceAll()
         {
-            var imageDBReq = Resources.LoadAsync<ImageDatabase>("GCImageDB");
-            var soundDBReq = Resources.LoadAsync<SoundDatabase>("GCSoundDB");
-            var fontReq = Resources.LoadAsync<Texture2D>("PixelMplus10");
+            var assetDBReq = Resources.LoadAsync<AssetDatabase>("GCAssetDB");
 
-            while (!imageDBReq.isDone)
+            while (!assetDBReq.isDone)
             {
                 yield return 0;
             }
-            _imageDB = imageDBReq.asset as ImageDatabase;
-            _numImage = _imageDB.images.Length;
-            _numAtlas = _imageDB.atlases.Length;
-            _atlas = new Dictionary<string, Texture2D>(_numAtlas);
-            _alpha = new Dictionary<string, Texture2D>(_numAtlas);
-            for (var i = 0; i < _numAtlas; ++i)
-            {
-                var name = _imageDB.atlases[i].name;
-                _atlas.Add(name, _imageDB.atlases[i]);
-                _alpha.Add(name, _imageDB.alphaAtlases[i]);
-            }
-
-            while (!soundDBReq.isDone)
-            {
-                yield return 0;
-            }
-            _soundDB = soundDBReq.asset as SoundDatabase;
-            _numSound = _soundDB.sounds.Length;
-            
-            while (!fontReq.isDone)
-            {
-                yield return 0;
-            }
-
-            _bitmapFontTexture = fontReq.asset as Texture2D;
-            _materialDrawString.SetTexture(_matPropCharTex, _bitmapFontTexture);
+            _assetDB = assetDBReq.asset as AssetDatabase;
+            _numImage = _assetDB.images.Length;
+            _numSound = _assetDB.sounds.Length;
 
             if (_onStart != null) _onStart.Invoke();
 
             yield return 0;
 
             _isLoaded = true;
-            _quad.enabled = true;
         }
 
         /// <summary>
@@ -360,6 +241,8 @@ namespace GameCanvas
         /// </summary>
         private void Update()
         {
+            if (!_isLoaded) return;
+
             // 画面サイズ判定
             if (_deviceWidth != Screen.width || _deviceHeight != Screen.height)
             {
@@ -375,108 +258,43 @@ namespace GameCanvas
         /// </summary>
         private void LateUpdate()
         {
-            var count = _drawQueue.Count;
-            var numGraphics = 0;
+            if (!_isLoaded) return;
 
-            for (var i = 0; i < count; ++i)
+            _DrawBorder();
+
+            var numRenderer = _renderers.Count;
+            for (var i = _renderIndex; i < numRenderer; ++i)
             {
-                var info = _drawQueue.Dequeue();
-
-                switch (info.type)
-                {
-                    case DrawType.Circle:
-                    case DrawType.FilledCircle:
-                    case DrawType.Rect:
-                    case DrawType.FilledRect:
-                        _graphicTypeArray[numGraphics] = (int)info.type;
-                        _graphicColorArray[numGraphics] = info.color;
-                        _graphicMatrixArray[numGraphics] = info.matrix;
-                        _graphicLineWidthArray[numGraphics*2] = info.lineWidthX;
-                        _graphicLineWidthArray[numGraphics*2+1] = info.lineWidthY;
-                        ++numGraphics;
-                        if (numGraphics == MAX_GRAPHIC_ARRAY) FlushDrawGraphic(ref numGraphics);
-                        break;
-
-                    case DrawType.Image:
-                        FlushDrawGraphic(ref numGraphics);
-                        FlushDrawImage(info);
-                        break;
-
-                    case DrawType.String:
-                        FlushDrawGraphic(ref numGraphics);
-                        FlushDrawString(info);
-                        break;
-
-                    default:
-                        new Exception("Unknown DrawType");
-                        return;
-                }
+                _renderers[i].enabled = false;
             }
-
-            FlushDrawGraphic(ref numGraphics);
-
-            // 描画情報キューをクリアする
-            _drawQueue.Clear();
+            
+            _renderIndex = 0;
         }
 
-        private void FlushDrawGraphic(ref int drawCalls)
+        private void UpdateDisplayScale()
         {
-            if (drawCalls == 0) return;
-            if (drawCalls > MAX_GRAPHIC_ARRAY) new Exception("max number of drawCall is " + MAX_GRAPHIC_ARRAY.ToString());
+            // 表示倍率の計算
+            _deviceWidth    = Screen.width;
+            _deviceHeight   = Screen.height;
+            var scaleWidth  = (float)_canvasWidth  / _deviceWidth;
+            var scaleHeight = (float)_canvasHeight / _deviceHeight;
+            _canvasScale    = Mathf.Max(scaleWidth, scaleHeight);
 
-            _materialDraw.SetFloat      ( _matPropDrawCalls, drawCalls              );
-            _materialDraw.SetFloatArray ( _matPropType     , _graphicTypeArray      );
-            _materialDraw.SetColorArray ( _matPropColor    , _graphicColorArray     );
-            _materialDraw.SetMatrixArray( _matPropMatrix   , _graphicMatrixArray    );
-            _materialDraw.SetFloatArray ( _matPropLineWidth, _graphicLineWidthArray );
+            // 実効解像度の変更
+            _canvasWidthWB  = Mathf.FloorToInt(Screen.width  * _canvasScale);
+            _canvasHeightWB = Mathf.FloorToInt(Screen.height * _canvasScale);
+            //Screen.SetResolution(_canvasWidthWB, _canvasHeightWB, isFullScreen);
 
-            var temp = RenderTexture.GetTemporary(_canvasWidth, _canvasHeight, 0);
-            Graphics.Blit(_canvasRender, temp);
-            _canvasRender.DiscardContents();
-            Graphics.Blit(temp, _canvasRender, _materialDraw);
-            RenderTexture.ReleaseTemporary(temp);
+            // 黒縁の計算
+            _canvasBorder.x = (_canvasWidthWB  - _canvasWidth ) * 0.5f;
+            _canvasBorder.y = (_canvasHeightWB - _canvasHeight) * 0.5f;
 
-            drawCalls = 0;
-        }
-
-        private void FlushDrawImage(DrawInfo info)
-        {
-            if (info.type != DrawType.Image) Debug.LogAssertion("`info.type == DrawType.Image` failed");
-
-            if (info.textureAlpha == null)
-            {
-                _materialDrawImage.SetFloat(_matPropEnableAlphaSplit, 0);
-            }
-            else
-            {
-                _materialDrawImage.SetFloat(_matPropEnableAlphaSplit, 1);
-                _materialDrawImage.SetTexture(_matPropAlphaTex, info.textureAlpha);
-            }
-            _materialDrawImage.SetTexture( _matPropImageTex, info.texture );
-            _materialDrawImage.SetMatrix ( _matPropMatrix  , info.matrix  );
-            _materialDrawImage.SetVector ( _matPropClip    , info.clip    );
-
-            var temp = RenderTexture.GetTemporary(_canvasWidth, _canvasHeight, 0);
-            Graphics.Blit(_canvasRender, temp);
-            _canvasRender.DiscardContents();
-            Graphics.Blit(temp, _canvasRender, _materialDrawImage);
-            RenderTexture.ReleaseTemporary(temp);
-        }
-
-        private void FlushDrawString(DrawInfo info)
-        {
-            if (info.type != DrawType.String) Debug.LogAssertion("`info.type == DrawType.String` failed");
-
-            _materialDrawString.SetColor     (_matPropColor     , info.color             );
-            _materialDrawString.SetMatrix    (_matPropMatrix    , info.matrix            );
-            _materialDrawString.SetFloat     (_matPropTextLength, info.charList.Count    );
-            _materialDrawString.SetFloatArray(_matPropText      , info.charList.ToArray());
-
-            var temp = RenderTexture.GetTemporary(_canvasWidth, _canvasHeight, 0);
-            Graphics.Blit(_canvasRender, temp);
-            _canvasRender.DiscardContents();
-            Graphics.Blit(temp, _canvasRender, _materialDrawString);
-            RenderTexture.ReleaseTemporary(temp);
+            // カメラ倍率
+            _camera.orthographicSize = _canvasHeightWB * 0.5f;
+            var cameraPos = _camera.transform.position;
+            cameraPos.x = _canvasBorder.x + _canvasWidth / 2;
+            cameraPos.y = _canvasBorder.y + _canvasHeight / 2;
+            _camera.transform.position = cameraPos;
         }
 
         private void UpdateTouches()
@@ -514,7 +332,7 @@ namespace GameCanvas
                 }
 
                 // タッチ座標の変換
-                _touchPoint = (_unscaledTouchPoint - _canvasBorderSize) * _canvasDisplayScale;
+                _touchPoint = (_unscaledTouchPoint - _canvasBorder) * _canvasScale;
 
                 // タッチ関連挙動の検出
                 switch (phase)
@@ -596,21 +414,6 @@ namespace GameCanvas
             }
         }
 
-        private void UpdateDisplayScale()
-        {
-            // 表示倍率と黒縁サイズの計算
-            _deviceWidth  = Screen.width;
-            _deviceHeight = Screen.height;
-            var scaleW = (float)_canvasWidth  / _deviceWidth;
-            var scaleH = (float)_canvasHeight / _deviceHeight;
-            _canvasDisplayScale = Mathf.Max(scaleW, scaleH);
-            _canvasBorderSize.x = (_deviceWidth  - _canvasWidth  / _canvasDisplayScale) * 0.5f;
-            _canvasBorderSize.y = (_deviceHeight - _canvasHeight / _canvasDisplayScale) * 0.5f;
-
-            // カメラ倍率
-            _camera.orthographicSize = _deviceHeight * _canvasDisplayScale * 0.5f;
-        }
-
         #endregion
 
 
@@ -625,13 +428,13 @@ namespace GameCanvas
         /// <returns>指定された画像の横幅</returns>
         public int GetImageWidth(int id)
         {
-            if (id >= _numImage)
+            if (id < 0 || id >= _numImage)
             {
                 Debug.LogWarning("存在しないファイルが指定されました");
                 return 0;
             }
 
-            return _imageDB.images[id].width;
+            return (int)_assetDB.images[id].rect.width;
         }
 
         /// <summary>
@@ -641,13 +444,13 @@ namespace GameCanvas
         /// <returns>指定された画像の高さ</returns>
         public int GetImageHeight(int id)
         {
-            if (id >= _numImage)
+            if (id < 0 || id >= _numImage)
             {
                 Debug.LogWarning("存在しないファイルが指定されました");
                 return 0;
             }
 
-            return _imageDB.images[id].height;
+            return (int)_assetDB.images[id].rect.height;
         }
 
         /// <summary>
@@ -656,7 +459,7 @@ namespace GameCanvas
         /// <param name="color">塗りの色</param>
         public void SetColor(Color color)
         {
-            _palletColor = color;
+            _renderColor = color;
         }
 
         /// <summary>
@@ -668,7 +471,10 @@ namespace GameCanvas
         /// <param name="alpha">不透明度 [0～1]</param>
         public void SetColor(float red, float green, float blue, float alpha = 1f)
         {
-            SetColor(new Color(red, green, blue, alpha));
+            _renderColor.r = red;
+            _renderColor.g = green;
+            _renderColor.b = blue;
+            _renderColor.a = alpha;
         }
 
         /// <summary>
@@ -710,9 +516,7 @@ namespace GameCanvas
         /// <param name="endY">終了点のY座標</param>
         public void DrawLine(float startX, float startY, float endX, float endY)
         {
-            var diffX = endX - startX;
-            var diffY = endY - startY;
-            FillRotatedRect(startX, startY, Mathf.RoundToInt(Mathf.Sqrt(diffX * diffX + diffY * diffY)), _lineWidth, Atan2(diffX, diffY), 0f, _lineWidth * 0.5f);
+            //
         }
 
         /// <summary>
@@ -724,15 +528,7 @@ namespace GameCanvas
         /// <param name="lineWidth">線の太さ</param>
         public void DrawCircle(float x, float y, int radius)
         {
-            if (radius <= 0)
-            {
-                // 0以下は許容しない
-                Debug.LogWarning("引数の値が不正です");
-                return;
-            }
-
-            var mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.identity, new Vector3(radius, radius, 1f));
-            _drawQueue.Enqueue(new DrawInfo(DrawType.Circle, mat.inverse, _palletColor, _lineWidth / radius, 0));
+            //
         }
 
         /// <summary>
@@ -744,7 +540,7 @@ namespace GameCanvas
         /// <param name="height">縦幅</param>
         public void DrawRect(float x, float y, float width, float height)
         {
-            DrawRotatedRect(x, y, width, height, 0);
+            //
         }
 
         /// <summary>
@@ -759,25 +555,7 @@ namespace GameCanvas
         /// <param name="rotationY">長方形の左上を原点としたときの回転の中心位置Y</param>
         public void DrawRotatedRect(float x, float y, float width, float height, float angle, float rotationX = 0f, float rotationY = 0f)
         {
-            if (width < 1 || height < 1)
-            {
-                // 負の幅は許容しない
-                Debug.LogWarning("引数の値が不正です");
-                return;
-            }
-
-            Matrix4x4 mat;
-            if (rotationX == 0 && rotationY == 0)
-            {
-                mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.AngleAxis(angle, Vector3.forward), new Vector3(width, height, 1f));
-            }
-            else
-            {
-                mat = Matrix4x4.TRS(new Vector3(x + rotationX, y + rotationY, 0f), Quaternion.AngleAxis(angle, Vector3.forward), Vector3.one);
-                mat *= Matrix4x4.TRS(new Vector3(-rotationX, -rotationY, 0f), Quaternion.identity, new Vector3(width, height, 1f));
-            }
-
-            _drawQueue.Enqueue(new DrawInfo(DrawType.Rect, mat.inverse, _palletColor, _lineWidth / width, _lineWidth / height));
+            //
         }
 
         /// <summary>
@@ -788,7 +566,13 @@ namespace GameCanvas
         /// <param name="y">Y座標</param>
         public void DrawImage(int id, float x, float y)
         {
-            DrawImageSRT(id, x, y, 1f, 1f, 0f);
+            if (id < 0 || id >= _numImage)
+            {
+                Debug.LogWarning("存在しないファイルが指定されました");
+                return;
+            }
+
+            _DrawSprite(_assetDB.images[id], _COLOR_WHITE, x, y, 1, 1, true);
         }
 
         /// <summary>
@@ -803,7 +587,7 @@ namespace GameCanvas
         /// <param name="clipLeft">画像左側の切り取る横幅</param>
         public void DrawClippedImage(int id, float x, float y, float clipTop, float clipRight, float clipBottom, float clipLeft)
         {
-            DrawClippedImageSRT(id, x, y, clipTop, clipRight, clipBottom, clipLeft, 1f, 1f, 0f);
+            //
         }
 
         /// <summary>
@@ -816,7 +600,7 @@ namespace GameCanvas
         /// <param name="scaleV">縦の拡縮率</param>
         public void DrawScaledImage(int id, float x, float y, float scaleH, float scaleV)
         {
-            DrawImageSRT(id, x, y, scaleH, scaleV, 0f);
+            //
         }
 
         /// <summary>
@@ -830,7 +614,7 @@ namespace GameCanvas
         /// <param name="rotationY">画像左上を原点としたときの回転の中心位置Y</param>
         public void DrawRotatedImage(int id, float x, float y, float angle, float rotationX = 0f, float rotationY = 0f)
         {
-            DrawImageSRT(id, x, y, 1f, 1f, angle, rotationX, rotationY);
+            //
         }
 
         /// <summary>
@@ -846,7 +630,7 @@ namespace GameCanvas
         /// <param name="rotationY">画像左上を原点としたときの回転の中心位置Y</param>
         public void DrawImageSRT(int id, float x, float y, float scaleH, float scaleV, float angle, float rotationX = 0f, float rotationY = 0f)
         {
-            DrawClippedImageSRT(id, x, y, 0, 0, 0, 0, scaleH, scaleV, angle, rotationX, rotationY);
+            //
         }
 
         /// <summary>
@@ -866,79 +650,7 @@ namespace GameCanvas
         /// <param name="rotationY">画像左上を原点としたときの回転の中心位置Y</param>
         public void DrawClippedImageSRT(int id, float x, float y, float clipTop, float clipRight, float clipBottom, float clipLeft, float scaleH, float scaleV, float angle, float rotationX = 0f, float rotationY = 0f)
         {
-            if (id >= _numImage)
-            {
-                Debug.LogWarning("存在しないファイルが指定されました");
-                return;
-            }
-
-            if (clipLeft < 0 || clipTop < 0 || clipRight < 0 || clipBottom < 0)
-            {
-                // 負の切り取り幅は許容しない
-                Debug.LogWarning("引数の値が不正です");
-                return;
-            }
-
-            if (scaleH == 0 || scaleV == 0)
-            {
-                // ゼロの拡縮率は許容しない
-                Debug.LogWarning("引数の値が不正です");
-                return;
-            }
-
-            if (x >= _canvasWidth || y >= _canvasHeight)
-            {
-                // 描画範囲外である
-                return;
-            }
-
-            var info = _imageDB.images[id];
-            var atlas = _atlas[info.atlasName];
-            var w = info.width;
-            var h = info.height;
-            var r = info.rect;
-            var ar = info.atlasRect;
-            var atlasWidth = atlas.width;
-            var atlasHeight = atlas.height;
-            var clip = new Vector4(atlasWidth * ar.x, atlasHeight * (1f - ar.w), atlasWidth * (1f - ar.z), atlasHeight * ar.y);
-            var offset = new Vector4(w * r.x - clipLeft, h * (1f - r.w) - clipTop, w * (1f - r.z) - clipRight, h * r.y - clipBottom);
-            if (offset.x < 0f)
-            {
-                clip.x -= offset.x;
-                offset.x = 0f;
-            }
-            if (offset.y < 0f)
-            {
-                clip.y -= offset.y;
-                offset.y = 0f;
-            }
-            if (offset.z < 0f)
-            {
-                clip.z -= offset.z;
-                offset.z = 0f;
-            }
-            if (offset.w < 0f)
-            {
-                clip.w -= offset.w;
-                offset.w = 0f;
-            }
-            x += offset.x * scaleH;
-            y += offset.y * scaleV;
-            //var pivot = new Vector2(rotationX, rotationY);
-            var pivot = new Vector2(rotationX - offset.x * scaleH, rotationY - offset.y * scaleV);
-
-            Matrix4x4 mat;
-            if (pivot.x == 0 && pivot.y == 0)
-            {
-                mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.AngleAxis(angle, Vector3.forward), new Vector3(scaleH, scaleV, 1f));
-            }
-            else
-            {
-                mat = Matrix4x4.TRS(new Vector3(x + pivot.x, y + pivot.y, 0f), Quaternion.AngleAxis(angle, Vector3.forward), Vector3.one);
-                mat *= Matrix4x4.TRS(new Vector3(-pivot.x, -pivot.y, 0f), Quaternion.identity, new Vector3(scaleH, scaleV, 1f));
-            }
-
-            _drawQueue.Enqueue(new DrawInfo(atlas, _alpha[info.atlasName], mat.inverse, clip));
+            //
         }
 
         /// <summary>
@@ -949,16 +661,7 @@ namespace GameCanvas
         /// <param name="radius">半径</param>
         public void FillCircle(float x, float y, int radius)
         {
-            if (radius < 1)
-            {
-                // 負の半径は許容しない
-                Debug.LogWarning("引数の値が不正です");
-                return;
-            }
-
-            var mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.identity, new Vector3(radius, radius, 1f));
-
-            _drawQueue.Enqueue(new DrawInfo(DrawType.FilledCircle, mat.inverse, _palletColor, 0, 0));
+            _DrawSprite(_assetDB.circle, _renderColor, x, y, radius * 2, radius * 2);
         }
 
         /// <summary>
@@ -970,7 +673,7 @@ namespace GameCanvas
         /// <param name="height">縦幅</param>
         public void FillRect(float x, float y, float width, float height)
         {
-            FillRotatedRect(x, y, width, height, 0);
+            _DrawSprite(_assetDB.rect, _renderColor, x, y, width, height);
         }
 
         /// <summary>
@@ -985,25 +688,7 @@ namespace GameCanvas
         /// <param name="rotationY">長方形の左上を原点としたときの回転の中心位置Y</param>
         public void FillRotatedRect(float x, float y, float width, float height, float angle, float rotationX = 0f, float rotationY = 0f)
         {
-            if (width < 1 || height < 1)
-            {
-                // 負の幅は許容しない
-                Debug.LogWarning("引数の値が不正です");
-                return;
-            }
-
-            Matrix4x4 mat;
-            if (rotationX == 0 && rotationY == 0)
-            {
-                mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.AngleAxis(angle, Vector3.forward), new Vector3(width, height, 1f));
-            }
-            else
-            {
-                mat = Matrix4x4.TRS(new Vector3(x + rotationX, y + rotationY, 0f), Quaternion.AngleAxis(angle, Vector3.forward), Vector3.one);
-                mat *= Matrix4x4.TRS(new Vector3(-rotationX, -rotationY, 0f), Quaternion.identity, new Vector3(width, height, 1f));
-            }
-
-            _drawQueue.Enqueue(new DrawInfo(DrawType.FilledRect, mat.inverse, _palletColor, 0, 0));
+            //
         }
 
         #endregion
@@ -1038,82 +723,76 @@ namespace GameCanvas
                 return;
             }
 
-            var strlen = Mathf.Min(str.Length, MAX_STRING_ARRAY);
-            var charList = new List<float>(strlen);
+            var strlen = str.Length;
 
             for (var i = 0; i < strlen; ++i)
             {
                 int n;
                 var c = str[i];
 
-                if      (c == '\n' || c == '\r') continue;           // 改行(無視)
-                else if (c == ' '  || c == '　') n = 0;              // スペース
-                else if (c >= '!'  && c <= '~' ) n = c - '!'  + 1;   // 基本ラテン文字(半角)
-                else if (c >= '！' && c <= '～') n = c - '！' + 1;   // 基本ラテン文字(全角)
+                if (c == '\n' || c == '\r') continue;   // 改行(無視)
+                else if (c == ' ' || c == '　') continue;// スペース
+                else if (c >= '!' && c <= '~') n = c - '!' + 1; // 基本ラテン文字(半角)
+                else if (c >= '！' && c <= '～') n = c - '！' + 1; // 基本ラテン文字(全角)
                 else if (c >= '、' && c <= '〕') n = c - '、' + 101; // 日本語記号
-                else if (c == '〝')              n = 122;            // 〝
-                else if (c == '〟')              n = 123;            // 〟
-                else if (c == '〠')              n = 124;            // ドクロ
+                else if (c == '〝') n = 122;             // 〝
+                else if (c == '〟') n = 123;             // 〟
+                else if (c == '〠') n = 124;             // ドクロ
                 else if (c >= 'ぁ' && c <= 'ゞ') n = c - 'ぁ' + 125; // ひらがな
-                else if (c == '“')              n = 221;            // “
-                else if (c == '”')              n = 222;            // ”
-                else if (c == '‘')              n = 223;            // ‘
-                else if (c == '’')              n = 224;            // ’
+                else if (c == '“') n = 221;             // “
+                else if (c == '”') n = 222;             // ”
+                else if (c == '‘') n = 223;             // ‘
+                else if (c == '’') n = 224;             // ’
                 else if (c >= 'ァ' && c <= 'ヿ') n = c - 'ァ' + 225; // カタカナ＋中黒＋長音
-                else if (c == '･' )              n = 315;            // 中黒(半角)
+                else if (c == '･') n = 315;             // 中黒(半角)
                 else if (c >= '①' && c <= '⑳') n = c - '①' + 330; // 囲み数字
-                else if (c == '￥')              n = 325;            // ￥
+                else if (c == '￥') n = 325;             // ￥
                 else if (c >= '←' && c <= '↓') n = c - '←' + 326; // 矢印
                 else if (c >= 'Ⅰ' && c <= 'Ⅹ') n = c - 'Ⅰ' + 350; // ローマ数字
-                else if (c == '∞')              n = 360;            // ∞
-                else if (c == '≪')              n = 361;            // ≪
-                else if (c == '≫')              n = 362;            // ≫
-                else if (c == '√')              n = 363;            // √
-                else if (c == '♪')              n = 364;            // ♪
-                else if (c == '♭')              n = 365;            // ♭
-                else if (c == '♯')              n = 366;            // ♯
-                else if (c == '♂')              n = 367;            // ♂
-                else if (c == '♀')              n = 368;            // ♀
-                else if (c == '℃')              n = 369;            // ℃
-                else if (c == '☆')              n = 370;            // ☆
-                else if (c == '★')              n = 371;            // ★
-                else if (c == '○' || c == '〇') n = 372;            // ○
-                else if (c == '●')              n = 373;            // ●
-                else if (c == '◎')              n = 374;            // ◎
-                else if (c == '◇')              n = 375;            // ◇
-                else if (c == '◆')              n = 376;            // ◆
-                else if (c == '□')              n = 377;            // □
-                else if (c == '■')              n = 378;            // ■
-                else if (c == '△')              n = 379;            // △
-                else if (c == '▲')              n = 380;            // ▲
-                else if (c == '▽')              n = 381;            // ▽
-                else if (c == '▼')              n = 382;            // ▼
-                else if (c == '♠'  || c == '♤' ) n = 383;            // ♠♤(スペード)
-                else if (c == '♣'  || c == '♧' ) n = 384;            // ♣♧(クローバー)
-                else if (c == '♥'  || c == '♡' ) n = 385;            // ♥♡(ハート)
-                else if (c == '♦'  || c == '♢' ) n = 386;            // ♦♢(ダイヤ)
-                else if (c == '※')              n = 387;            // ※
-                else if (c == '…')              n = 388;            // …
-                else if (c == '─')              n = 389;            // ─
-                else if (c == '│')              n = 390;            // │
-                else if (c == '┌')              n = 391;            // ┌
-                else if (c == '┐')              n = 392;            // ┐
-                else if (c == '└')              n = 393;            // └
-                else if (c == '┘')              n = 394;            // ┘
-                else if (c == '├')              n = 395;            // ├
-                else if (c == '┤')              n = 396;            // ┤
-                else if (c == '┬')              n = 397;            // ┬
-                else if (c == '┴')              n = 398;            // ┴
-                else if (c == '┼')              n = 399;            // ┼
-                else                             n = 599;            // その他(豆腐に置き換え)
+                else if (c == '∞') n = 360;             // ∞
+                else if (c == '≪') n = 361;             // ≪
+                else if (c == '≫') n = 362;             // ≫
+                else if (c == '√') n = 363;             // √
+                else if (c == '♪') n = 364;             // ♪
+                else if (c == '♭') n = 365;             // ♭
+                else if (c == '♯') n = 366;             // ♯
+                else if (c == '♂') n = 367;             // ♂
+                else if (c == '♀') n = 368;             // ♀
+                else if (c == '℃') n = 369;             // ℃
+                else if (c == '☆') n = 370;             // ☆
+                else if (c == '★') n = 371;             // ★
+                else if (c == '○' || c == '〇') n = 372; // ○
+                else if (c == '●') n = 373;             // ●
+                else if (c == '◎') n = 374;             // ◎
+                else if (c == '◇') n = 375;             // ◇
+                else if (c == '◆') n = 376;             // ◆
+                else if (c == '□') n = 377;             // □
+                else if (c == '■') n = 378;             // ■
+                else if (c == '△') n = 379;             // △
+                else if (c == '▲') n = 380;             // ▲
+                else if (c == '▽') n = 381;             // ▽
+                else if (c == '▼') n = 382;             // ▼
+                else if (c == '♠' || c == '♤') n = 383; // ♠♤(スペード)
+                else if (c == '♣' || c == '♧') n = 384; // ♣♧(クローバー)
+                else if (c == '♥' || c == '♡') n = 385; // ♥♡(ハート)
+                else if (c == '♦' || c == '♢') n = 386; // ♦♢(ダイヤ)
+                else if (c == '※') n = 387;             // ※
+                else if (c == '…') n = 388;             // …
+                else if (c == '─') n = 389;             // ─
+                else if (c == '│') n = 390;             // │
+                else if (c == '┌') n = 391;             // ┌
+                else if (c == '┐') n = 392;             // ┐
+                else if (c == '└') n = 393;             // └
+                else if (c == '┘') n = 394;             // ┘
+                else if (c == '├') n = 395;             // ├
+                else if (c == '┤') n = 396;             // ┤
+                else if (c == '┬') n = 397;             // ┬
+                else if (c == '┴') n = 398;             // ┴
+                else if (c == '┼') n = 399;             // ┼
+                else n = 400; // その他(豆腐に置き換え)
 
-                charList.Add(n);
+                _DrawSprite(_assetDB.characters[n], _renderColor, x + i * _fontSize, y, _fontSize, _fontSize, true);
             }
-
-            var scale = _fontSize * 0.1f;
-            var mat = Matrix4x4.TRS(new Vector3(x, y, 0f), Quaternion.identity, new Vector3(scale, scale, 1f));
-
-            _drawQueue.Enqueue(new DrawInfo(charList, mat.inverse, _palletColor));
         }
 
         #endregion
@@ -1265,6 +944,7 @@ namespace GameCanvas
         /// <param name="rotationY">画像左上を原点としたときの回転の中心位置Y</param>
         public void DrawClippedCameraImageSRT(float x, float y, float clipTop, float clipRight, float clipBottom, float clipLeft, float scaleH, float scaleV, float angle, float rotationX = 0f, float rotationY = 0f)
         {
+            /*
             if (_cameraTexture == null)
             {
                 Debug.LogWarning("カメラ映像入力が無効です");
@@ -1304,6 +984,7 @@ namespace GameCanvas
 
             var clip = new Vector4(clipLeft, clipTop, clipRight, clipBottom);
             _drawQueue.Enqueue(new DrawInfo(_cameraTexture, null, mat.inverse, clip));
+            */
         }
 
         #endregion
@@ -1413,18 +1094,7 @@ namespace GameCanvas
 
             UpdateDisplayScale();
 
-            // キャンバスの再生成
-            if (_canvasRender != null)
-            {
-                RenderTexture.active = null;
-                _canvasRender.Release();
-            }
-            _canvasRender = new RenderTexture(_canvasWidth, _canvasHeight, 0);
-            _canvasRender.Create();
-            _quad.transform.localScale = new Vector3(_canvasWidth, -_canvasHeight, 1f);
-            _quad.material.mainTexture = _canvasRender;
-
-            ClearScreen();
+            if (_isLoaded) ClearScreen();
         }
 
         /// <summary>
@@ -1432,9 +1102,46 @@ namespace GameCanvas
         /// </summary>
         public void ClearScreen()
         {
-            _drawQueue.Clear();
-            _canvasRender.DiscardContents();
-            Graphics.Blit(null, _canvasRender, _materialInit);
+            _DrawSprite(_assetDB.rect, _COLOR_WHITE, 0, 0, _canvasWidth, _canvasHeight);
+        }
+
+        private void _DrawBorder()
+        {
+            if (_canvasBorder.x > 0)
+            {
+                _DrawSprite(_assetDB.rect, _COLOR_BLACK, -_canvasBorder.x, 0, _canvasBorder.x, _canvasHeight);
+                _DrawSprite(_assetDB.rect, _COLOR_BLACK, _canvasWidth    , 0, _canvasBorder.x, _canvasHeight);
+            }
+            else if (_canvasBorder.y > 0)
+            {
+                _DrawSprite(_assetDB.rect, _COLOR_BLACK, 0, -_canvasBorder.y, _canvasWidth, _canvasBorder.y);
+                _DrawSprite(_assetDB.rect, _COLOR_BLACK, 0, _canvasHeight   , _canvasWidth, _canvasBorder.y);
+            }
+        }
+
+        private void _DrawSprite(Sprite sprite, Color color, float x, float y, float scaleX, float scaleY, bool flipY = false)
+        {
+            var i = _renderIndex;
+
+            if (i >= _renderers.Count)
+            {
+                AddRenderer();
+            }
+
+            _renderers[i].enabled = true;
+            _renderers[i].sprite = sprite;
+            _renderers[i].color = color;
+            _renderers[i].flipY = flipY;
+
+            var pos = _transforms[i].position;
+            pos.Set(_canvasBorder.x + x, _canvasBorder.y + y, i * 0.25f - 1000);
+            _transforms[i].position = pos;
+
+            var scale = _transforms[i].localScale;
+            scale.Set(scaleX, scaleY, 1f);
+            _transforms[i].localScale = scale;
+
+            ++_renderIndex;
         }
 
         #endregion
@@ -1448,7 +1155,7 @@ namespace GameCanvas
         /// <param name="isLoop">ループするかどうか。真の場合、StopBGM()を呼ぶまでループ再生します</param>
         public void PlayBGM(int id, bool isLoop = true)
         {
-            if (id >= _numSound)
+            if (id < 0 || id >= _numSound)
             {
                 Debug.LogWarning("存在しないファイルが指定されました");
                 return;
@@ -1459,7 +1166,7 @@ namespace GameCanvas
                 _audioBGM.Stop();
             }
 
-            _audioBGM.clip = _soundDB.sounds[id];
+            _audioBGM.clip = _assetDB.sounds[id];
             _audioBGM.loop = isLoop;
             _audioBGM.Play();
         }
@@ -1501,13 +1208,13 @@ namespace GameCanvas
         /// <param name="id">再生する音声のID。snd0.png ならば 0 を指定します</param>
         public void PlaySE(int id)
         {
-            if (id >= _numSound)
+            if (id < 0 || id >= _numSound)
             {
                 Debug.LogWarning("存在しないファイルが指定されました");
                 return;
             }
 
-            _audioSE.PlayOneShot(_soundDB.sounds[id]);
+            _audioSE.PlayOneShot(_assetDB.sounds[id]);
         }
 
         /// <summary>
@@ -2049,6 +1756,7 @@ namespace GameCanvas
         /// <param name="rotationY">画像左上を原点としたときの回転の中心位置Y</param>
         public void DrawClippedImageSRTFromNet(string url, float x, float y, float clipTop, float clipRight, float clipBottom, float clipLeft, float scaleH, float scaleV, float angle, float rotationX = 0f, float rotationY = 0f)
         {
+            /*
             if (url == null || url.IndexOf("http") != 0)
             {
                 Debug.LogWarning("無効なURLです");
@@ -2108,6 +1816,7 @@ namespace GameCanvas
 
             var clip = new Vector4(clipLeft, clipTop, clipRight, clipBottom);
             _drawQueue.Enqueue(new DrawInfo(texture, null, mat.inverse, clip));
+            */
         }
         
         private IEnumerator DownloadWebText(string url, Action<string> callback)
